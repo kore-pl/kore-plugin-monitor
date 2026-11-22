@@ -1,9 +1,9 @@
 {
   "id": "monitor",
   "name": "系统监控插件",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "protocol": "kore.plugin.v1",
-  "lifecycle": "resident",
+  "lifecycle": "lazy",
   "depth_level": "production",
   "entry": "bin/monitor",
   "capabilities": [

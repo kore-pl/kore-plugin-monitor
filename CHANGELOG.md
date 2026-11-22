@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-23
+
+### Fixed
+
+- **生命周期声明由 `resident` 改为 `lazy`**（P1 事故）：`MaxSlots=3` 下 monitor 作为第 3 个常驻插件
+  占满槽位，而 resident 永不驱逐，导致 db-mysql / file / logs / cron / ssl / process / discover /
+  container / backup / firewall / redis 共 11 个 lazy 插件唤醒时全部 `429 E_RATELIMIT`（常驻槽位已满）。
+- 改为 lazy 后按需冷启、空闲自动退出，不再占据常驻槽位；采集能力不变——`monitor.system` /
+  `monitor.processes` / `monitor.disks` / `monitor.temperature` 仍为请求内真实读 `/proc` 与 `/sys`，
+  插件本身零 ticker（G-19），lazy 化不引入任何后台轮询。
+- `manifest.json` 同步版本号（该文件只含握手字段，不含 `lifecycle`）。
+
 ## [0.2.0] - 2026-11-23
 
 ### Added

@@ -58,9 +58,10 @@ tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256
 
 ## 资源
 
-`info.json` 声明常驻 `memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内），
-`capabilities: ["system:read"]`，无触发式唤醒（`triggers: []`）。`monitor.*` 为 lazy 采集：
-一次调用完成即释放，不常驻采样。
+`info.json` 声明 `lifecycle: "lazy"`（按需冷启、空闲自动退出，不占常驻槽位）、
+`memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内）、`capabilities: ["system:read"]`，
+无触发式唤醒（`triggers: []`）。`monitor.*` 为请求内采集：一次调用完成即返回，
+不常驻采样、零 ticker（G-19）。
 
 ## License
 
