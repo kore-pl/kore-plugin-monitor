@@ -16,7 +16,7 @@ import (
 func testConfig() config {
 	return config{
 		id:           "monitor",
-		version:      "0.1.0",
+		version:      "0.2.0",
 		requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:read"},
 		startedAt:    time.Now(),
@@ -103,36 +103,47 @@ func TestHandshake(t *testing.T) {
 	}
 }
 
-// TestSampleOK 无故障时 sample 返回结构化占位结果，且 req_id 回显。
-func TestSampleOK(t *testing.T) {
-	for _, method := range []string{"monitor.sample", "sample"} {
-		r := invoke(t, method, "r-1", json.RawMessage(`{"metrics":["cpu"]}`))
+// TestSystemOK 无故障时 monitor.system 返回真实 /proc 采集结果，且 req_id 回显。
+func TestSystemOK(t *testing.T) {
+	for _, method := range []string{"monitor.system", "system"} {
+		r := invoke(t, method, "r-1", json.RawMessage(`{"per_cpu":true}`))
 		if r.Error != nil || r.ReqID != "r-1" {
 			t.Fatalf("%s error=%v req_id=%q", method, r.Error, r.ReqID)
 		}
-		if !strings.Contains(string(r.Result), `"source":"placeholder"`) || !strings.Contains(string(r.Result), `"cpu"`) {
-			t.Fatalf("sample 结果非结构化占位: %s", r.Result)
+		for _, want := range []string{`"source":"proc"`, `"usage_percent"`, `"total"`, `"load1"`, `"uptime_s"`, `"disks"`, `"network"`} {
+			if !strings.Contains(string(r.Result), want) {
+				t.Fatalf("%s 结果缺字段 %s: %s", method, want, r.Result)
+			}
 		}
 	}
 }
 
-// TestAlertOK 合法阈值范围内的告警配置成功；非法阈值/枚举返回 E_INVALID。
-func TestAlertOK(t *testing.T) {
-	r := invoke(t, "monitor.alert.set", "r-2", json.RawMessage(`{"rule_id":"r1","metric":"cpu","comparator":"gt","threshold":85,"enabled":true}`))
-	if r.Error != nil || !strings.Contains(string(r.Result), `"applied":true`) {
-		t.Fatalf("alert.set error=%v result=%s", r.Error, r.Result)
+// TestProcessesAndTemperatureOK 校验 top N 进程与 thermal 结果的基本形状。
+func TestProcessesAndTemperatureOK(t *testing.T) {
+	r := invoke(t, "monitor.processes", "r-2", json.RawMessage(`{"limit":5,"sort":"cpu"}`))
+	if r.Error != nil || !strings.Contains(string(r.Result), `"items"`) || !strings.Contains(string(r.Result), `"cpu_percent"`) {
+		t.Fatalf("processes error=%v result=%s", r.Error, r.Result)
 	}
+	r = invoke(t, "monitor.temperature", "r-3", nil)
+	if r.Error != nil || !strings.Contains(string(r.Result), `"available"`) || !strings.Contains(string(r.Result), `"zones"`) {
+		t.Fatalf("temperature error=%v result=%s", r.Error, r.Result)
+	}
+}
+
+// TestInvalidParams 非法 limit / 相对路径 / 非对象参数返回 E_INVALID。
+func TestInvalidParams(t *testing.T) {
 	bad := []struct {
+		method string
 		params string
 		want   string
 	}{
-		{`{"rule_id":"r1","metric":"cpu","comparator":"gt","threshold":101}`, "越界"},
-		{`{"rule_id":"r1","metric":"cpu","comparator":"eq","threshold":50}`, "comparator"},
-		{`{"rule_id":"r1","metric":"cpu","comparator":"gt"}`, "threshold"},
-		{`"x"`, "JSON 对象"},
+		{"monitor.processes", `{"limit":0}`, "limit"},
+		{"monitor.processes", `{"sort":"pid"}`, "sort"},
+		{"monitor.disks", `{"path":"relative/path"}`, "绝对路径"},
+		{"monitor.system", `"x"`, "JSON 对象"},
 	}
 	for _, tc := range bad {
-		r := invoke(t, "monitor.alert.set", "r-3", json.RawMessage(tc.params))
+		r := invoke(t, tc.method, "r-4", json.RawMessage(tc.params))
 		if r.Error == nil || r.Error.Code != pluginapi.E_INVALID || !strings.Contains(r.Error.Message, tc.want) {
 			t.Fatalf("params=%s error=%v，期望 E_INVALID 含 %q", tc.params, r.Error, tc.want)
 		}

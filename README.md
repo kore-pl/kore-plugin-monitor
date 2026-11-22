@@ -1,28 +1,37 @@
 # kore-plugin-monitor
 
-kore 的系统监控插件：采样 + 阈值告警。生产级（`depth_level=production`），
-属 M5 批 1「无依赖基础件」，一句话能力对齐 proposal §2.1：**CPU / 内存 / 磁盘采样 + 阈值告警**。
+kore 的系统监控插件：**真实读取 Linux `/proc` 与 `/sys`**，按需返回系统概览、进程 TOP、
+磁盘用量与温度。生产级（`depth_level=production`），属 M5 批 1「无依赖基础件」。
 
 ## 设计约束
 
-- **kore 零轮询（G-19）**：插件内**不起 ticker / AfterFunc / 周期循环**。
-  采样只暴露方法接口，由宿主按需调用；会话循环纯事件驱动，收帧才处理。
-- **骨架口径**：当前为方法骨架，采样返回结构化占位数据（`source: "placeholder"`），
-  **不真读 `/proc`**、不读运行配置、无副作用；告警配置只返回结构化确认，不落盘。
-- **薄壳依赖**：`go.mod` 只依赖 `github.com/pengtang1024/kore/pkg/pluginapi v0.1.1`，
-  无第三方依赖；静态单二进制，`CGO_ENABLED=0` + `-trimpath` + `-s -w`。
-- **数据形状显式**：对外结构体字段全部显式列出，不使用 `object` / `any` / `map[string]any`。
+- **零轮询（G-19）**：插件内**不起 ticker / AfterFunc / 后台 goroutine**。CPU 与进程 CPU%
+  都在单次请求内读取两次采样、`time.Sleep(200ms)` 求 delta；调用结束即返回，不常驻。
+- **零第三方依赖**：`go.mod` 只依赖 `github.com/pengtang1024/kore/pkg/pluginapi`；
+  静态单二进制，`CGO_ENABLED=0` + `-trimpath` + `-s -w`。
+- **仅 Linux 真实实现**：非 Linux 平台 `monitor.*` 显式返回 `E_UNSUPPORTED`，不静默降级。
+- **部分失败不扩大**：容器里缺失的 `/proc` 文件只让对应字段为 0 / 空数组，并写入
+  `warnings[]`，不让整次调用失败；`monitor.temperature` 无 thermal zone 时返回
+  `available=false` + 空数组，不报错。
+- **时间预算**：`monitor.system` / `monitor.processes` 约 200ms 采样 + 少量文件 IO，
+  单次调用 ≤1s；`monitor.disks` / `monitor.temperature` 为纯读取，毫秒级。
+- **数据形状显式**：对外结构体字段全部显式列出，不使用 `object` / `any` / `map[string]any`；
+  大数值用 `int64` 字节，人类可读串另给 `*_human` 字段（如 `used_human: "3.2 GiB"`）。
 
 ## 协议方法
 
 | 方法 | 入参 | 结果 |
 | --- | --- | --- |
-| `monitor.sample` | `{"metrics":["cpu","memory","disk"]}`（可选，省略=全部） | `SampleResult`：schema/source/sampled_at + cpu/memory/disk 采样字段 |
-| `monitor.alert.set` | `{"rule_id","metric","comparator","threshold","enabled"}` | `AlertResult`：rule_id/applied/digest |
+| `monitor.system` | `{"per_cpu":true,"include_loopback":false}`（均可选） | `schema/source/sampled_at` + `cpu`（使用率、分核可选）+ `memory`（total/available/used/free/buffers/cached/swap_total/swap_used）+ `load`（load1/5/15、running/total、last_pid）+ `uptime`（uptime_s/idle_s）+ `disks[]` + `network[]` + `warnings[]` |
+| `monitor.processes` | `{"limit":20,"sort":"cpu"}`；`limit` ∈ [1,500]，`sort` ∈ `cpu`/`mem` | `schema/sampled_at/sample_interval_ms/sort/limit/count/total` + `items[]`：`{pid, comm, state, cpu_percent, mem_rss_bytes, mem_rss_human, threads}` + `warnings[]` |
+| `monitor.disks` | `{"path":"/var"}`（可选，绝对路径） | `items[]`：挂载点容量 + `inodes_total/used/free/used_percent` + `/proc/diskstats` 的 `read_bytes/write_bytes/reads/writes`；`path` 为空返回全部真实块设备挂载点，否则返回最长前缀匹配的单个挂载点 |
+| `monitor.temperature` | 无 | `available` + `zones[]`：`{zone, temp_c, type}`（`/sys/class/thermal/thermal_zone*`） |
 
-- `metrics` 仅允许 `cpu` / `memory` / `disk`。
-- `comparator` 仅允许 `gt` / `gte` / `lt` / `lte`；`threshold` 范围 `[0,100]`。
-- 参数非法回 `E_INVALID`，未知方法回 `E_NOTFOUND`，执行面故障回 `E_UPSTREAM`。
+- 磁盘只统计 `/proc/mounts` 中设备为 `/dev/*` 且文件系统非虚拟类型（tmpfs / proc / sysfs /
+  overlay / squashfs / cgroup 等）的挂载点；`/dev/fuse` 这类字符设备不计入。
+- 网络来自 `/proc/net/dev`，默认排除 `lo`；`include_loopback=true` 可保留。
+- 进程 `cpu_percent` 按单核归一（多核满载可 >100），两次采样间退出的进程跳过并计入 warning。
+- 参数非法回 `E_INVALID`，未知方法回 `E_NOTFOUND`，执行面故障回 `E_UPSTREAM`，非 Linux 回 `E_UNSUPPORTED`。
 
 握手复用 site 骨架：`kore.hello` → 会话循环 → `kore.ping` / `kore.reload` / `kore.shutdown`。
 
@@ -36,20 +45,22 @@ make build
 make dist
 ```
 
-`make dist` 输出 `dist/monitor-0.1.0.tar.gz`（条目：`info.json`、`bin/monitor`、`SHA256SUMS`），
-tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256 一致，`size_bytes` 与实测包体积偏差 0。
+`make dist` 输出 `dist/monitor-<version>.tar.gz`（条目：`info.json`、`bin/monitor`、`SHA256SUMS`），
+tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256 一致，`size_bytes` 与实测包体积偏差 ≤2 字节。
 
-## 故障注入
+## 测试
 
-`tests/fault/` 四类用例（G-20 / proposal §4.8 S-04）：`kill_test.go`（信号 9）、
-`timeout_test.go`（请求超时）、`disk_test.go`（ENOSPC）、`cgroup_test.go`（memory.max）。
-每类对两业务方法注入故障，断言 `nil` 结果 + `E_UPSTREAM` + 类别关键词；
-`sanityNoFault` 反证断言不是假通过。
+- `internal/monitor/*_test.go`：`/proc/stat` 两次采样 delta、`meminfo`、`loadavg`、`mounts`
+  虚拟文件系统过滤、`net/dev`、`processes` 排序与 delta、thermal 缺失、部分文件缺失降级。
+- `tests/e2e/`：本机 Linux 真实 E2E——CPU% ∈ [0,100]、内存 total>0、真实挂载点与网卡、
+  5 个真实进程、inode、thermal、两次连续调用 CPU% 不同、单次调用 RSS 增量 ≤2 MiB、耗时 ≤1s。
+- `tests/fault/` 四类故障注入（kill / timeout / disk / cgroup）验证方法级 `E_UPSTREAM`。
 
 ## 资源
 
 `info.json` 声明常驻 `memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内），
-`capabilities: ["system:read"]`，无触发式唤醒（`triggers: []`）。
+`capabilities: ["system:read"]`，无触发式唤醒（`triggers: []`）。`monitor.*` 为 lazy 采集：
+一次调用完成即释放，不常驻采样。
 
 ## License
 

@@ -25,7 +25,7 @@ type manifest struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-// config 是插件运行期配置：环境变量 + 内嵌清单，不读任何配置文件、不读 /proc。
+// config 是插件运行期配置：环境变量 + 内嵌清单；配置加载不读 /proc，采集由执行面按请求读取。
 type config struct {
 	socket       string
 	id           string

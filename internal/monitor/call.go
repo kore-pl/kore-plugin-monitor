@@ -2,51 +2,64 @@ package monitor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// Call 是方法级统一入口：校验参数 → 调执行面 → 编码结构化结果。
-// 执行面返回的错误统一映射为 E_UPSTREAM，保证四类故障都走方法级错误返回。
+// Call 是方法级统一入口：校验平台与参数 → 调执行面 → 编码结构化结果。
+// 平台不支持回 E_UNSUPPORTED；执行面故障统一回 E_UPSTREAM。
 func Call(method string, raw json.RawMessage, exec Executor, ctx Context) (json.RawMessage, *pluginapi.Error) {
+	if !platformSupported {
+		return nil, &pluginapi.Error{Code: pluginapi.E_UNSUPPORTED, Message: errUnsupportedPlatform.Error()}
+	}
 	if exec == nil {
 		exec = NewExecutor()
 	}
 	switch method {
-	case "monitor.sample":
-		return callSample(raw, exec, ctx)
-	case "monitor.alert.set":
-		return callAlert(raw, exec, ctx)
+	case "monitor.system":
+		params, err := parseSystemParams(raw)
+		if err != nil {
+			return nil, invalid(err.Error())
+		}
+		result, execErr := exec.System(ctx, params)
+		if execErr != nil {
+			return nil, classify(execErr)
+		}
+		return encode(result)
+	case "monitor.processes":
+		params, err := parseProcessParams(raw)
+		if err != nil {
+			return nil, invalid(err.Error())
+		}
+		result, execErr := exec.Processes(ctx, params)
+		if execErr != nil {
+			return nil, classify(execErr)
+		}
+		return encode(result)
+	case "monitor.disks":
+		params, err := parseDisksParams(raw)
+		if err != nil {
+			return nil, invalid(err.Error())
+		}
+		result, execErr := exec.Disks(ctx, params)
+		if execErr != nil {
+			return nil, classify(execErr)
+		}
+		return encode(result)
+	case "monitor.temperature":
+		if err := requireObject(raw); err != nil {
+			return nil, invalid(err.Error())
+		}
+		result, execErr := exec.Temperature(ctx)
+		if execErr != nil {
+			return nil, classify(execErr)
+		}
+		return encode(result)
 	default:
 		return nil, &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知方法: " + method}
 	}
-}
-
-// callSample 校验 sample 入参并返回采样结果。
-func callSample(raw json.RawMessage, exec Executor, ctx Context) (json.RawMessage, *pluginapi.Error) {
-	p, err := parseSampleParams(raw)
-	if err != nil {
-		return nil, invalid(err.Error())
-	}
-	result, execErr := exec.Sample(ctx, p.Metrics)
-	if execErr != nil {
-		return nil, upstream(execErr)
-	}
-	return encode(result)
-}
-
-// callAlert 校验 alert.set 入参并返回告警配置结果。
-func callAlert(raw json.RawMessage, exec Executor, ctx Context) (json.RawMessage, *pluginapi.Error) {
-	req, err := parseAlertParams(raw)
-	if err != nil {
-		return nil, invalid(err.Error())
-	}
-	result, execErr := exec.SetAlert(ctx, req)
-	if execErr != nil {
-		return nil, upstream(execErr)
-	}
-	return encode(result)
 }
 
 // encode 把具体结构体编码为 JSON 载荷；失败按内部错误处理。
@@ -65,4 +78,17 @@ func invalid(msg string) *pluginapi.Error {
 
 func upstream(err error) *pluginapi.Error {
 	return &pluginapi.Error{Code: pluginapi.E_UPSTREAM, Message: fmt.Sprintf("执行面故障: %v", err)}
+}
+
+// classify 把执行面错误映射为协议错误码：平台不支持→E_UNSUPPORTED，
+// path 未命中挂载点→E_INVALID，其余（含四类故障注入）→E_UPSTREAM。
+func classify(err error) *pluginapi.Error {
+	switch {
+	case errors.Is(err, errUnsupportedPlatform):
+		return &pluginapi.Error{Code: pluginapi.E_UNSUPPORTED, Message: err.Error()}
+	case errors.Is(err, errPathNotMounted):
+		return invalid(err.Error())
+	default:
+		return upstream(err)
+	}
 }

@@ -53,16 +53,10 @@ func dispatch(request *pluginapi.Request, cfg config, logger *slog.Logger) (*plu
 
 // normalizeMethod 把裸名 / 全名统一归一为 monitor.<verb>，非业务方法返回 false。
 func normalizeMethod(method, id string) (string, bool) {
-	switch method {
-	case "monitor.sample", "monitor.alert.set":
-		return method, true
-	}
 	name := strings.TrimPrefix(method, id+".")
 	switch name {
-	case "sample":
-		return "monitor.sample", true
-	case "alert.set":
-		return "monitor.alert.set", true
+	case "system", "processes", "disks", "temperature":
+		return "monitor." + name, true
 	default:
 		return "", false
 	}
