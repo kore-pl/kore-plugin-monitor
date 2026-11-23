@@ -16,7 +16,7 @@ import (
 func testConfig() config {
 	return config{
 		id:           "monitor",
-		version:      "0.2.0",
+		version:      "0.3.0",
 		requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:read"},
 		startedAt:    time.Now(),

@@ -50,6 +50,7 @@ func (c *Collector) Processes(ctx Context, params ProcessParams) (ProcessesResul
 		addWarning(&result.Warnings, "%d 个进程 status 不可读，mem_rss_bytes 记 0", statusMissing)
 	}
 	items := make([]ProcessInfo, 0, len(curr))
+	totalMemory := c.processMemoryTotal(&result.Warnings)
 	for pid, current := range curr {
 		percent := 0.0
 		if previous, ok := prev[pid]; ok {
@@ -60,10 +61,14 @@ func (c *Collector) Processes(ctx Context, params ProcessParams) (ProcessesResul
 		if threads == 0 {
 			threads = current.stat.Threads
 		}
+		memPercent := 0.0
+		if totalMemory > 0 {
+			memPercent = percentOf(current.rss, totalMemory)
+		}
 		items = append(items, ProcessInfo{
-			PID: pid, Comm: current.stat.Comm, State: string(current.stat.State),
+			PID: pid, Comm: current.stat.Comm, Name: current.stat.Comm, State: string(current.stat.State),
 			CPUPercent: normalizeCPU(percent), MemRSSBytes: current.rss,
-			MemRSSHuman: humanBytes(current.rss), Threads: threads,
+			MemRSSHuman: humanBytes(current.rss), MemPercent: memPercent, Threads: threads,
 		})
 	}
 	sortProcessItems(items, params.Sort)
@@ -80,6 +85,17 @@ func (c *Collector) Processes(ctx Context, params ProcessParams) (ProcessesResul
 type scanCount struct {
 	skipped       int
 	statusMissing int
+}
+
+// processMemoryTotal 读取 /proc/meminfo 的 MemTotal 作为 mem_percent 分母；
+// 读取失败只写 warning，占比记 0，不中断进程列表。
+func (c *Collector) processMemoryTotal(warnings *[]string) int64 {
+	data, err := os.ReadFile(filepath.Join(c.procRoot, "meminfo"))
+	if err != nil {
+		addWarning(warnings, "读取 /proc/meminfo 失败，mem_percent 记 0: %v", err)
+		return 0
+	}
+	return parseMeminfo(string(data)).Total
 }
 
 // scanProcesses 扫描 /proc/<pid>/stat + status；单进程退出/不可读只计数，不中断整次扫描。

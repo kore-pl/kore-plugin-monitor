@@ -7,6 +7,10 @@ kore 的系统监控插件：**真实读取 Linux `/proc` 与 `/sys`**，按需�
 
 - **零轮询（G-19）**：插件内**不起 ticker / AfterFunc / 后台 goroutine**。CPU 与进程 CPU%
   都在单次请求内读取两次采样、`time.Sleep(200ms)` 求 delta；调用结束即返回，不常驻。
+  历史曲线同样没有后台采集器：只在每次 `monitor.system` 调用时按「距上次采样 ≥ 间隔」
+  决定是否追加一个点（`internal/monitor/history.go`），空载时零 CPU。
+- **阈值告警只回传、不外发**：超限时在返回体标注 `alerts[]`（指标 / 当前值 / 阈值 / 级别 /
+  可操作 hint），插件**不发通知、邮件、Webhook、不出网**（G-10）；通知统一归主壳告警中心。
 - **零第三方依赖**：`go.mod` 只依赖 `github.com/pengtang1024/kore/pkg/pluginapi`；
   静态单二进制，`CGO_ENABLED=0` + `-trimpath` + `-s -w`。
 - **仅 Linux 真实实现**：非 Linux 平台 `monitor.*` 显式返回 `E_UNSUPPORTED`，不静默降级。
@@ -22,16 +26,35 @@ kore 的系统监控插件：**真实读取 Linux `/proc` 与 `/sys`**，按需�
 
 | 方法 | 入参 | 结果 |
 | --- | --- | --- |
-| `monitor.system` | `{"per_cpu":true,"include_loopback":false}`（均可选） | `schema/source/sampled_at` + `cpu`（使用率、分核可选）+ `memory`（total/available/used/free/buffers/cached/swap_total/swap_used）+ `load`（load1/5/15、running/total、last_pid）+ `uptime`（uptime_s/idle_s）+ `disks[]` + `network[]` + `warnings[]` |
-| `monitor.processes` | `{"limit":20,"sort":"cpu"}`；`limit` ∈ [1,500]，`sort` ∈ `cpu`/`mem` | `schema/sampled_at/sample_interval_ms/sort/limit/count/total` + `items[]`：`{pid, comm, state, cpu_percent, mem_rss_bytes, mem_rss_human, threads}` + `warnings[]` |
+| `monitor.system` | `{"per_cpu":true,"include_loopback":false,"history_points":60,"history_interval_s":60,"thresholds":{"cpu_percent":90,"memory_percent":90,"disk_percent":90}}`（均可选） | `schema/source/sampled_at` + `cpu`（使用率、分核可选）+ `memory`（total/available/used/free/buffers/cached/swap_total/swap_used）+ `load`（load1/5/15、running/total、last_pid）+ `uptime`（uptime_s/idle_s）+ `disks[]` + `network[]` + `alerts[]` + `history` + `warnings[]` |
+| `monitor.processes` | `{"limit":20,"sort":"cpu"}`；`limit` ∈ [1,500]，`sort` ∈ `cpu`/`mem` | `schema/sampled_at/sample_interval_ms/sort/limit/count/total` + `items[]`：`{pid, comm, name, state, cpu_percent, mem_rss_bytes, mem_rss_human, mem_percent, threads}` + `warnings[]` |
 | `monitor.disks` | `{"path":"/var"}`（可选，绝对路径） | `items[]`：挂载点容量 + `inodes_total/used/free/used_percent` + `/proc/diskstats` 的 `read_bytes/write_bytes/reads/writes`；`path` 为空返回全部真实块设备挂载点，否则返回最长前缀匹配的单个挂载点 |
 | `monitor.temperature` | 无 | `available` + `zones[]`：`{zone, temp_c, type}`（`/sys/class/thermal/thermal_zone*`） |
+
+### 历史曲线（`system.history`）
+
+- 短期环形缓冲，默认保留最近 **60** 个采样点（`history_points` ∈ [2,720]），采样间隔默认
+  **60 秒**（`history_interval_s` ∈ [1,3600]）。只有距上次采样 ≥ 间隔时才追加，否则原样返回。
+- 落盘 `<KORE_STATE_DIR>/history.json`（**0600**，原子替换），进程 / 主壳重启后自动接续。
+- 返回**列式数组**，下标一一对应、可直接画折线：
+  `timestamps`（Unix 毫秒）+ `cpu_percent[]` + `memory_percent[]` + `load1[]` + `disk_percent[]`，
+  另带 `schema/interval_s/capacity/count/appended`。磁盘曲线取 `/` 挂载点，没有 `/` 时取占用最高者。
+
+### 阈值告警（`system.alerts`）
+
+- 阈值可配（0 表示关闭该指标，缺省 90/90/90）；`current ≥ threshold` 即标注告警：
+  `{"metric":"cpu|memory|disk","current":93.2,"threshold":90,"level":"warning|critical","hint":"..."}`。
+- 超出阈值 ≥10 个百分点记 `critical`，否则 `warning`；`hint` 给出下一步可执行动作
+  （如 `monitor.processes {"sort":"cpu"}` / `monitor.disks`）。插件不发送任何通知。
 
 - 磁盘只统计 `/proc/mounts` 中设备为 `/dev/*` 且文件系统非虚拟类型（tmpfs / proc / sysfs /
   overlay / squashfs / cgroup 等）的挂载点；`/dev/fuse` 这类字符设备不计入。
 - 网络来自 `/proc/net/dev`，默认排除 `lo`；`include_loopback=true` 可保留。
-- 进程 `cpu_percent` 按单核归一（多核满载可 >100），两次采样间退出的进程跳过并计入 warning。
+- 进程 `cpu_percent` 按单核归一（多核满载可 >100），两次采样间退出的进程跳过并计入 warning；
+  `name` 是 `comm` 的可读别名（二者相同），`mem_percent = VmRSS / MemTotal`。
 - 参数非法回 `E_INVALID`，未知方法回 `E_NOTFOUND`，执行面故障回 `E_UPSTREAM`，非 Linux 回 `E_UNSUPPORTED`。
+- `info.json` 为四个只读方法逐一声明 `method_capabilities`（全部 `system:read`），
+  与插件级 `capabilities` 一致；内核按方法粒度鉴权与审计。
 
 握手复用 site 骨架：`kore.hello` → 会话循环 → `kore.ping` / `kore.reload` / `kore.shutdown`。
 
@@ -51,7 +74,12 @@ tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256
 ## 测试
 
 - `internal/monitor/*_test.go`：`/proc/stat` 两次采样 delta、`meminfo`、`loadavg`、`mounts`
-  虚拟文件系统过滤、`net/dev`、`processes` 排序与 delta、thermal 缺失、部分文件缺失降级。
+  虚拟文件系统过滤、`net/dev`、`processes` 排序与 delta、thermal 缺失、部分文件缺失降级；
+  历史曲线追加 / 环形覆盖 / 容量裁剪 / 重启接续 / 间隔未到不追加 / 损坏重建；
+  阈值边界（等于 / 超出 / 远离 / 关闭 / 多指标）与 TOP 排序契约。
+- 仓根 `method_capabilities_test.go`：读 `info.json` 的方法清单，逐项断言 `Call` 有对应分发分支
+  （声明 vs 实现一致性，双向无遗漏）；`g19_test.go`：静态门禁扫描全仓 `.go`，禁止
+  `time.NewTicker(` / `time.AfterFunc(` / `time.Tick(`，定时器只能来自内核 `scheduler`。
 - `tests/e2e/`：本机 Linux 真实 E2E——CPU% ∈ [0,100]、内存 total>0、真实挂载点与网卡、
   5 个真实进程、inode、thermal、两次连续调用 CPU% 不同、单次调用 RSS 增量 ≤2 MiB、耗时 ≤1s。
 - `tests/fault/` 四类故障注入（kill / timeout / disk / cgroup）验证方法级 `E_UPSTREAM`。
@@ -59,9 +87,9 @@ tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256
 ## 资源
 
 `info.json` 声明 `lifecycle: "lazy"`（按需冷启、空闲自动退出，不占常驻槽位）、
-`memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内）、`capabilities: ["system:read"]`，
-无触发式唤醒（`triggers: []`）。`monitor.*` 为请求内采集：一次调用完成即返回，
-不常驻采样、零 ticker（G-19）。
+`memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内）、`capabilities: ["system:read"]`
+与四条 `method_capabilities`（均 `system:read`），无触发式唤醒（`triggers: []`）。
+`monitor.*` 为请求内采集：一次调用完成即返回，不常驻采样、零 ticker（G-19）。
 
 ## License
 

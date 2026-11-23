@@ -4,17 +4,20 @@ package monitor
 // 大数值用 int64 字节/秒，人类可读串另给 *_human 字段。
 
 // SystemResult 是 monitor.system 的一屏概览结果。
+// alerts 只在本返回体里标注（通知归主壳告警中心）；history 是可直接绘图的列式曲线。
 type SystemResult struct {
-	Schema    string      `json:"schema"`
-	Source    string      `json:"source"`
-	SampledAt string      `json:"sampled_at"`
-	CPU       CPUInfo     `json:"cpu"`
-	Memory    MemoryInfo  `json:"memory"`
-	Load      LoadInfo    `json:"load"`
-	Uptime    UptimeInfo  `json:"uptime"`
-	Disks     []DiskUsage `json:"disks"`
-	Network   []NetStat   `json:"network"`
-	Warnings  []string    `json:"warnings"`
+	Schema    string        `json:"schema"`
+	Source    string        `json:"source"`
+	SampledAt string        `json:"sampled_at"`
+	CPU       CPUInfo       `json:"cpu"`
+	Memory    MemoryInfo    `json:"memory"`
+	Load      LoadInfo      `json:"load"`
+	Uptime    UptimeInfo    `json:"uptime"`
+	Disks     []DiskUsage   `json:"disks"`
+	Network   []NetStat     `json:"network"`
+	Alerts    []Alert       `json:"alerts"`
+	History   HistoryResult `json:"history"`
+	Warnings  []string      `json:"warnings"`
 }
 
 // CPUInfo 是 CPU 总使用率与可选分核使用率。
@@ -113,13 +116,16 @@ type ProcessesResult struct {
 }
 
 // ProcessInfo 是单个进程的 CPU / 内存 / 线程快照。cpu_percent 按单核归一，多核可超过 100。
+// name 是 comm 的可读别名（二者相同），mem_percent 是 RSS / 物理内存总量。
 type ProcessInfo struct {
 	PID         int     `json:"pid"`
 	Comm        string  `json:"comm"`
+	Name        string  `json:"name"`
 	State       string  `json:"state"`
 	CPUPercent  float64 `json:"cpu_percent"`
 	MemRSSBytes int64   `json:"mem_rss_bytes"`
 	MemRSSHuman string  `json:"mem_rss_human"`
+	MemPercent  float64 `json:"mem_percent"`
 	Threads     int     `json:"threads"`
 }
 

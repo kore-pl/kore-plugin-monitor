@@ -18,6 +18,7 @@ const DefaultSampleInterval = 200 * time.Millisecond
 type Collector struct {
 	procRoot string
 	sysRoot  string
+	stateDir string
 	interval time.Duration
 	now      func() time.Time
 	sleep    func(time.Duration)
@@ -27,6 +28,7 @@ type Collector struct {
 func NewExecutor() Executor { return NewCollector(DefaultProcRoot, DefaultSysRoot) }
 
 // NewCollector 构造采集器；root 为空时回落到标准挂载点。
+// stateDir 是插件状态目录（KORE_STATE_DIR），用于持久化历史曲线；未设置时只保留进程内缓冲。
 func NewCollector(procRoot, sysRoot string) *Collector {
 	if procRoot == "" {
 		procRoot = DefaultProcRoot
@@ -35,26 +37,37 @@ func NewCollector(procRoot, sysRoot string) *Collector {
 		sysRoot = DefaultSysRoot
 	}
 	return &Collector{
-		procRoot: procRoot, sysRoot: sysRoot, interval: DefaultSampleInterval,
-		now: time.Now, sleep: time.Sleep,
+		procRoot: procRoot, sysRoot: sysRoot, stateDir: strings.TrimSpace(os.Getenv("KORE_STATE_DIR")),
+		interval: DefaultSampleInterval,
+		now:      time.Now, sleep: time.Sleep,
 	}
 }
 
-// System 返回一屏概览：CPU / 内存 / 负载 / uptime / 磁盘 / 网络。
+// System 返回一屏概览：CPU / 内存 / 负载 / uptime / 磁盘 / 网络，并标注阈值告警与历史曲线。
 // 任何单个 /proc 文件读取失败只追加 warning，不中断整次调用。
 func (c *Collector) System(ctx Context, params SystemParams) (SystemResult, error) {
-	result := SystemResult{Schema: "monitor.system.v1", Source: "proc", Warnings: []string{}}
+	params.withDefaults()
+	result := SystemResult{
+		Schema: "monitor.system.v1", Source: "proc", Warnings: []string{}, Alerts: []Alert{},
+	}
 	interval, err := c.window(ctx)
 	if err != nil {
 		return result, err
 	}
-	result.SampledAt = c.now().UTC().Format(time.RFC3339Nano)
+	sampledAt := c.now()
+	result.SampledAt = sampledAt.UTC().Format(time.RFC3339Nano)
 	result.CPU = c.collectCPU(interval, params.PerCPU, &result.Warnings)
 	result.Memory = c.collectMemory(&result.Warnings)
 	result.Load = c.collectLoad(&result.Warnings)
 	result.Uptime = c.collectUptime(&result.Warnings)
 	result.Disks = c.diskUsages(&result.Warnings)
 	result.Network = c.collectNetwork(params.IncludeLoopback, &result.Warnings)
+	diskPercent, diskMount := diskSummary(result.Disks)
+	result.Alerts = evaluateAlerts(result.CPU.UsagePercent, result.Memory.UsedPercent, diskPercent, diskMount, params.Thresholds)
+	result.History = c.recordHistory(HistorySample{
+		TSUnixMS: sampledAt.UnixMilli(), CPUPercent: result.CPU.UsagePercent,
+		MemoryPercent: result.Memory.UsedPercent, Load1: result.Load.Load1, DiskPercent: diskPercent,
+	}, params, &result.Warnings)
 	return result, nil
 }
 

@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-23
+
+### Added
+
+- **方法级 capability 声明**（PLUGIN-MATURITY §3.5 #12）：`info.json` 新增 `method_capabilities`，
+  `monitor.system` / `monitor.processes` / `monitor.disks` / `monitor.temperature` 四条只读方法
+  全部声明 `system:read`，内核可按方法粒度鉴权与审计；`manifest.json` 同步版本号。
+- **历史曲线（短期环形缓冲，零 ticker）**：`monitor.system` 结果新增 `history`——
+  `timestamps`（Unix 毫秒）+ `cpu_percent[]` / `memory_percent[]` / `load1[]` / `disk_percent[]`
+  列式数组，可直接画折线。默认保留最近 60 点、采样间隔 60s，可用
+  `history_points`（2..720）与 `history_interval_s`（1..3600）调整；只在「距上次采样 ≥ 间隔」时
+  追加，不做任何后台采集。缓冲以 **0600** 原子落盘到 `<KORE_STATE_DIR>/history.json`，
+  进程 / 主壳重启后自动接续；文件损坏只写 warning 并重建，不影响采集。
+- **阈值告警**：`monitor.system` 结果新增 `alerts[]`，可配 CPU% / 内存% / 磁盘% 阈值
+  （缺省 90/90/90，0 表示关闭），`current ≥ threshold` 即标注
+  `{metric,current,threshold,level,hint}`；超出 ≥10 个百分点记 `critical`，否则 `warning`，
+  hint 给出下一步命令。插件只回传不发送通知（通知归主壳告警中心，不出网、不违 G-10）。
+- **进程 TOP 契约补全**：`monitor.processes` 的 `items[]` 新增 `name`（与 `comm` 相同）与
+  `mem_percent`（VmRSS / MemTotal），仍支持 `sort` ∈ `cpu`/`mem` 与 `limit` ∈ [1,500]；
+  `mem_percent` 分母读取失败只降级为 0 + warning。
+- 测试：声明 vs 实现一致性（读 `info.json` 方法清单逐项断言 `Call` 有分发分支）、历史缓冲
+  （追加 / 环形覆盖 / 容量裁剪 / 重启接续 / 间隔未到 / 损坏重建）、阈值边界（等于 / 超出 /
+  远离 / 关闭 / 多指标）、TOP 排序（CPU / 内存 / 同值 pid）与 `g19_test.go` 零 ticker 静态门禁；
+  非 Linux 以 `!linux` 构建标签断言四个方法均显式 `E_UNSUPPORTED`。
+
+### Changed
+
+- `monitor.system` 新增可选参数 `history_points` / `history_interval_s` / `thresholds`，
+  越界参数回 `E_INVALID`；原有 `per_cpu` / `include_loopback` 与返回字段保持不变（向后兼容）。
+- 历史曲线与阈值告警都是请求内计算，`lifecycle` 保持 `lazy`，零 ticker / 零 goroutine / 零出网。
+
 ## [0.2.1] - 2026-11-23
 
 ### Fixed
