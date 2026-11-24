@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 
@@ -38,6 +39,35 @@ func setRlimit(t *testing.T, resource int, low syscall.Rlimit) {
 			t.Errorf("恢复 rlimit(%d) 失败: %v", resource, err)
 		}
 	})
+}
+
+// dropInheritedFDs 关闭从外层 shell / make 链继承来的 fd（fd ≥ 3 且未置 FD_CLOEXEC）。
+//
+// 预算按「自身已开 fd + headroom」计算，继承 fd 虽已计入总数，却会挤占 Go runtime /
+// race detector 可能懒创建的余量；外层嵌套越深（make check → sh → make → go test），
+// 继承 fd 越多，余量越不可预测。关掉之后 fd 表只由本进程决定，预算与宿主继承 fd、
+// shell 层数彻底解耦。Go 自己开的 fd 一律带 FD_CLOEXEC，不会被误关。
+func dropInheritedFDs(t *testing.T) {
+	t.Helper()
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("读取自身 fd 表失败: %v", err)
+	}
+	dropped := 0
+	for _, ent := range ents {
+		fd, convErr := strconv.Atoi(ent.Name())
+		if convErr != nil || fd < 3 {
+			continue
+		}
+		flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+		if errno != 0 || flags&syscall.FD_CLOEXEC != 0 {
+			continue
+		}
+		if closeErr := syscall.Close(fd); closeErr == nil {
+			dropped++
+		}
+	}
+	t.Logf("关闭继承 fd %d 个（预算只按本进程 fd 表计算）", dropped)
 }
 
 // TestResourceExhaustionHistoryWrite 用 RLIMIT_FSIZE 限制本进程可写文件大小，
@@ -107,8 +137,29 @@ func TestResourceExhaustionFileDescriptors(t *testing.T) {
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &old); err != nil {
 		t.Fatalf("读取 RLIMIT_NOFILE 失败: %v", err)
 	}
-	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Cur: 64, Max: old.Max}); err != nil {
-		t.Fatalf("注入 RLIMIT_NOFILE 失败: %v", err)
+	// 预算相对自身已开 fd（不写死 Cur:64）：本用例在本进程内注入，go test / race 运行时
+	// 自身占的 fd 必须先剔除，再用「当前 fd 数 + 余量」当预算，否则父进程继承的多寡会
+	// 直接决定"自占 fd"这一步是否真的发生（实测：继承 60 个 fd 时 64 的预算一个都开不出来，
+	// 用例仍绿，但已经不再证明自己耗尽了 fd）。
+	dropInheritedFDs(t)
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("读取自身 fd 表失败: %v", err)
+	}
+	const headroom = 8
+	budget := uint64(len(ents)) + headroom
+	if budget > old.Max {
+		t.Fatalf("预算 %d 超过外层硬限 %d：环境把 RLIMIT_NOFILE 压得过低", budget, old.Max)
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Cur: budget, Max: old.Max}); err != nil {
+		t.Fatalf("收紧 RLIMIT_NOFILE 到 %d 失败: %v", budget, err)
+	}
+	var injected syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &injected); err != nil {
+		t.Fatalf("读取 RLIMIT_NOFILE 失败: %v", err)
+	}
+	if injected.Cur != budget {
+		t.Fatalf("RLIMIT_NOFILE 回读=%d，期望预算 %d（预算未生效）", injected.Cur, budget)
 	}
 	var held []*os.File
 	t.Cleanup(func() {
@@ -119,12 +170,19 @@ func TestResourceExhaustionFileDescriptors(t *testing.T) {
 			t.Errorf("恢复 RLIMIT_NOFILE 失败: %v", err)
 		}
 	})
-	for i := 0; i < 512; i++ {
+	for i := 0; i < 4096; i++ {
 		file, err := os.Open(os.DevNull)
 		if err != nil {
+			// 正控：只有 EMFILE 才算真的耗尽；其它错误说明预算没生效。
+			if !errors.Is(err, syscall.EMFILE) {
+				t.Fatalf("耗尽 fd 时 open 失败原因不是 EMFILE: %v", err)
+			}
 			break
 		}
 		held = append(held, file)
+	}
+	if len(held) == 0 {
+		t.Fatalf("RLIMIT_NOFILE=%d 下没有任何空位被耗尽，预算未生效", budget)
 	}
 	if _, err := os.ReadFile(filepath.Join(procRoot, "stat")); err == nil {
 		t.Fatalf("fd 耗尽后仍能读 /proc fixture（已占 %d 个 fd），注入未生效", len(held))
