@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-24
+
+### Changed
+
+- **依赖升级：`pkg/pluginapi` v0.1.1 → v0.1.3**（`go.mod` / `go.sum`）。v0.1.3 新增约 2300 行
+  （含 `rootpolicy.go` 737 行静态表），编进二进制的只读表从 `.rodata` 迁到 `.data`，包体因此
+  增长（0.3.0 的 1344418 B → 0.3.1 实测见索引 `size_bytes`）。**业务源码零改动**：
+  `main.go` / `internal/**` 一行未动，四个方法（`system` / `processes` / `disks` / `temperature`）
+  的入参与返回契约与 0.3.0 完全一致。
+- 同版本必须对应唯一 dist sha（RELEASE §0/§1.1）：依赖升级改变包字节，故以 0.3.1 承载，不覆盖
+  `v0.3.0` 的 release 资产与索引记录。
+
+### Added
+
+- **四类边界用例**（`tests/boundary/`，仅测试，不进 dist）：异常输入、并发、权限、资源耗尽。
+- **开源资产九件套**（`CONTRIBUTING` / `SECURITY` / `CODE_OF_CONDUCT` / `AGENTS.md` /
+  `.github` issue、PR 模板与 CI 少触发）：仅仓库治理文件，不进 dist。
+
 ## [0.3.0] - 2026-11-23
 
 ### Added
