@@ -43,6 +43,14 @@ func NewCollector(procRoot, sysRoot string) *Collector {
 	}
 }
 
+// SetSampleInterval 覆盖请求内两次采样的等待间隔（配置契约 sample_interval_ms）。
+// 它仍是单次调用内的 time.Sleep，不引入 ticker / 后台 goroutine（G-19）。
+func (c *Collector) SetSampleInterval(d time.Duration) {
+	if d > 0 {
+		c.interval = d
+	}
+}
+
 // System 返回一屏概览：CPU / 内存 / 负载 / uptime / 磁盘 / 网络，并标注阈值告警与历史曲线。
 // 任何单个 /proc 文件读取失败只追加 warning，不中断整次调用。
 func (c *Collector) System(ctx Context, params SystemParams) (SystemResult, error) {

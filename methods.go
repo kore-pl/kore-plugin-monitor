@@ -19,7 +19,7 @@ type statusResult struct {
 }
 
 // dispatch 把请求分发为响应帧；第二个返回值表示收到 kore.shutdown。
-func dispatch(request *pluginapi.Request, cfg config, logger *slog.Logger) (*pluginapi.Response, bool) {
+func dispatch(request *pluginapi.Request, cfg *config, logger *slog.Logger) (*pluginapi.Response, bool) {
 	response := &pluginapi.Response{Type: pluginapi.TypeResponse, ID: request.ID, ReqID: request.ReqID}
 	switch request.Method {
 	case "kore.shutdown":
@@ -30,7 +30,29 @@ func dispatch(request *pluginapi.Request, cfg config, logger *slog.Logger) (*plu
 		response.Result = pingResult(cfg)
 		return response, false
 	case "kore.reload":
+		values, source, err := resolveValues(cfg.store)
+		if err != nil {
+			response.Error = &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "重载配置失败: " + err.Error()}
+			return response, false
+		}
+		cfg.values, cfg.source = values, source
 		response.Result = json.RawMessage(`{"ok":true,"config_digest":""}`)
+		return response, false
+	case cfg.id + ".config.get", "config.get":
+		result, perr := configGet(cfg)
+		if perr != nil {
+			response.Error = perr
+			return response, false
+		}
+		response.Result = result
+		return response, false
+	case cfg.id + ".config.set", "config.set":
+		result, perr := configSet(request.Params, cfg)
+		if perr != nil {
+			response.Error = perr
+			return response, false
+		}
+		response.Result = result
 		return response, false
 	}
 	method, ok := normalizeMethod(request.Method, cfg.id)
@@ -42,7 +64,12 @@ func dispatch(request *pluginapi.Request, cfg config, logger *slog.Logger) (*plu
 	if request.TimeoutMS > 0 {
 		ctx.Deadline = time.Now().Add(time.Duration(request.TimeoutMS) * time.Millisecond).UnixNano()
 	}
-	result, perr := monitor.Call(method, request.Params, monitor.NewExecutor(), ctx)
+	params := applyConfigDefaults(method, request.Params, cfg)
+	exec := monitor.NewExecutor()
+	if collector, ok := exec.(*monitor.Collector); ok {
+		collector.SetSampleInterval(sampleInterval(cfg))
+	}
+	result, perr := monitor.Call(method, params, exec, ctx)
 	if perr != nil {
 		response.Error = perr
 		return response, false
@@ -63,7 +90,7 @@ func normalizeMethod(method, id string) (string, bool) {
 }
 
 // pingResult 组装 kore.ping 结果。
-func pingResult(cfg config) json.RawMessage {
+func pingResult(cfg *config) json.RawMessage {
 	b, _ := json.Marshal(statusResult{
 		Status:     "ready",
 		UptimeS:    int64(time.Since(cfg.startedAt).Seconds()),

@@ -10,16 +10,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pengtang1024/kore-plugin-monitor/internal/plugincfg"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-func testConfig() config {
-	return config{
+func testConfig(t *testing.T) *config {
+	t.Helper()
+	return &config{
 		id:           "monitor",
-		version:      "0.3.0",
+		version:      "0.4.0",
 		requiresKore: ">=0.1.0 <0.2.0",
-		capabilities: []string{"system:read"},
+		capabilities: []string{"system:read", "system:admin"},
 		startedAt:    time.Now(),
+		store:        plugincfg.NewStore(t.TempDir()),
+		values:       defaultValues(),
+		source:       plugincfg.SourceDefault,
 	}
 }
 
@@ -55,7 +60,7 @@ func invoke(t *testing.T, method, reqID string, params json.RawMessage) *plugina
 	defer func() { _ = kernelConn.Close() }()
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(pluginConn, testConfig(), testLogger())
+		done <- serve(pluginConn, testConfig(t), testLogger())
 		_ = pluginConn.Close()
 	}()
 	writeRequest(t, kernelConn, method, reqID, params)
@@ -79,7 +84,7 @@ func TestHandshake(t *testing.T) {
 	pluginConn, kernelConn := net.Pipe()
 	defer func() { _ = kernelConn.Close() }()
 	done := make(chan error, 1)
-	go func() { done <- handshake(pluginConn, testConfig()); _ = pluginConn.Close() }()
+	go func() { done <- handshake(pluginConn, testConfig(t)); _ = pluginConn.Close() }()
 
 	env := readFrame(t, kernelConn)
 	request, ok := env.(*pluginapi.Request)

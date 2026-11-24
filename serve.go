@@ -12,7 +12,7 @@ import (
 
 // serve 执行会话循环：读帧 → 分发 → 写 response；收到 kore.shutdown 后返回 nil。
 // 会话循环是纯事件驱动：只有收到请求帧才处理，不内置任何定时/轮询逻辑（G-19）。
-func serve(conn net.Conn, cfg config, logger *slog.Logger) error {
+func serve(conn net.Conn, cfg *config, logger *slog.Logger) error {
 	for {
 		payload, err := pluginapi.ReadFrame(conn, pluginapi.MaxFrameSize)
 		if err != nil {

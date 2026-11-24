@@ -53,8 +53,14 @@ kore 的系统监控插件：**真实读取 Linux `/proc` 与 `/sys`**，按需�
 - 进程 `cpu_percent` 按单核归一（多核满载可 >100），两次采样间退出的进程跳过并计入 warning；
   `name` 是 `comm` 的可读别名（二者相同），`mem_percent = VmRSS / MemTotal`。
 - 参数非法回 `E_INVALID`，未知方法回 `E_NOTFOUND`，执行面故障回 `E_UPSTREAM`，非 Linux 回 `E_UNSUPPORTED`。
-- `info.json` 为四个只读方法逐一声明 `method_capabilities`（全部 `system:read`），
-  与插件级 `capabilities` 一致；内核按方法粒度鉴权与审计。
+- `info.json` 为四个采集方法逐一声明 `method_capabilities`（`system:read`），并为
+  `monitor.config.get`（`system:read`）/ `monitor.config.set`（`system:admin`）声明配置契约方法；
+  插件级 `capabilities` 同时包含两者，内核按方法粒度鉴权与审计。
+- **配置契约**（PLUGIN-CONFIG）：`monitor.config.get` 返回 `{schema,values,source}` 表单描述，
+  `monitor.config.set` 校验后原子落盘 `<KORE_STATE_DIR>/config.json`（0600）并热生效；
+  可配历史曲线点数/间隔、三类告警阈值、进程列表默认条数与排序、请求内采样间隔。
+  优先级 `config.json` > `KORE_MONITOR_*` 环境变量 > 代码默认值；全部为请求内读取，
+  保存后下一次调用即用新值，`restart_required=false`。无需凭据类字段。
 
 握手复用 site 骨架：`kore.hello` → 会话循环 → `kore.ping` / `kore.reload` / `kore.shutdown`。
 
@@ -87,8 +93,8 @@ tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256
 ## 资源
 
 `info.json` 声明 `lifecycle: "lazy"`（按需冷启、空闲自动退出，不占常驻槽位）、
-`memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内）、`capabilities: ["system:read"]`
-与四条 `method_capabilities`（均 `system:read`），无触发式唤醒（`triggers: []`）。
+`memory_mb: 6`（单插件目标 12 MiB / 红线 24 MiB 之内）、`capabilities: ["system:read","system:admin"]`
+与六条 `method_capabilities`（四个采集方法 `system:read` + `config.get` `system:read` + `config.set` `system:admin`），无触发式唤醒（`triggers: []`）。
 `monitor.*` 为请求内采集：一次调用完成即返回，不常驻采样、零 ticker（G-19）。
 
 ## License
@@ -110,7 +116,7 @@ MIT © pengtang1024
 - **行为准则**：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **兼容性**：`protocol: kore.plugin.v1` · `requires_kore: >=0.1.0 <0.2.0` · `lifecycle: lazy` · 深度等级 `production`。
 - **验证方式**：本地 `make check` 优先（CI 只在 push main / tag / PR / 手动跑；发布前 `make dist` 连跑两次核对 sha 一致）。
-- **发布产物**：`make dist` → `dist/monitor-0.3.1.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
+- **发布产物**：`make dist` → `dist/monitor-0.4.0.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
 - **相关仓库**：[索引 kore-plugins](https://github.com/kore-pl/kore-plugins) · [协议文档](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-PROTOCOL.md) · [SDK 指南](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-SDK.md)
 
 <!-- oss:end -->

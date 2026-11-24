@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-24
+
+### 新增
+
+- **配置契约 `monitor.config.get` / `monitor.config.set`**（PLUGIN-CONFIG §1/§2）：让 monitor 在统一配置面板里拥有自己的设置表单。`config.get` 返回 `{schema,values,source}`，schema 固定 `title` + `fields`，8 个可配置字段全部显式类型（`int` / `select`）、中文 label/help、int 带 min/max、select 带非空 options，禁 `object` / `any`（G-24）。可配项全部锚定本仓真实能力：历史曲线保留点数与采样间隔、CPU/内存/磁盘告警阈值（0=关闭）、进程列表默认条数与排序、请求内两次采样间隔（不是后台 ticker，G-19）。本仓无凭据类字段，故未声明 `sensitive` 字段；通用掩码能力由 `internal/plugincfg` 按 schema 驱动保留并测试覆盖（G-30）。
+- **`config.set` 校验 → 原子写 → 更新内存**：配置落 `<KORE_STATE_DIR>/config.json`（0600，同目录临时文件 → fsync → rename → fsync 目录），非法值回 `E_INVALID` 且旧配置不变。全部可配项为请求内读取，保存后下一次 `monitor.*` 调用即用新值，`restart_required=false`，`warnings` 给出热生效提示。优先级 `config.json` > `KORE_MONITOR_*` 环境变量 > 代码默认值；`config.get` 的 `source` 随来源正确切换（file/env/default）。`kore.reload` 重新从文件加载。
+- **`info.json` 方法级声明**：新增 `monitor.config.get: system:read` / `monitor.config.set: system:admin`，插件级 `capabilities` 增列 `system:admin`（PROTOCOL §3.1.2.1）。`manifest.json` 同步版本。dispatch 支持全名与裸名（`monitor.config.get` / `config.get`）两种命中路径。
+- **契约测试**：schema 逐条核对（§2 类型枚举/必填项/中文 label/min-max/options/默认值）、set 校验（非法值 E_INVALID 且内存不变）、持久化（0600 + 值一致 + source=file）、热生效（业务入参注入 + config.get 反映新值）、优先级（file 覆盖 env、env 兜底）、敏感占位机制与非法 schema 拒绝。
+- **回归防护**：参数默认注入只处理合法 JSON 对象，`"x"` 这类非法入参原样交回底层校验，避免被悄悄规整成 `{}` 而绕过 `E_INVALID`。
+
+### 测试
+
+- `go test ./...`、`go test -race ./...` 全绿（含新增契约测试），`go vet ./...` 通过。
+
 ## [0.3.1] - 2026-11-24
 
 ### Changed
