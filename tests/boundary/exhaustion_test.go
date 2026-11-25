@@ -16,32 +16,18 @@ package boundary
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/pengtang1024/kore-plugin-monitor/internal/monitor"
 )
-
-// setRlimit 注入限额并在用例结束恢复（恢复失败要暴露，避免污染后续用例）。
-func setRlimit(t *testing.T, resource int, low syscall.Rlimit) {
-	t.Helper()
-	var old syscall.Rlimit
-	if err := syscall.Getrlimit(resource, &old); err != nil {
-		t.Fatalf("读取 rlimit(%d) 失败: %v", resource, err)
-	}
-	if err := syscall.Setrlimit(resource, &low); err != nil {
-		t.Fatalf("注入 rlimit(%d)=%+v 失败: %v", resource, low, err)
-	}
-	t.Cleanup(func() {
-		if err := syscall.Setrlimit(resource, &old); err != nil {
-			t.Errorf("恢复 rlimit(%d) 失败: %v", resource, err)
-		}
-	})
-}
 
 // dropInheritedFDs 关闭从外层 shell / make 链继承来的 fd（fd ≥ 3 且未置 FD_CLOEXEC）。
 //
@@ -72,60 +58,175 @@ func dropInheritedFDs(t *testing.T) {
 	t.Logf("关闭继承 fd %d 个（预算只按本进程 fd 表计算）", dropped)
 }
 
-// TestResourceExhaustionHistoryWrite 用 RLIMIT_FSIZE 限制本进程可写文件大小，
+// fsizeChildEnv 标记"当前是被父用例拉起的子进程"：子进程只跑注入逻辑，
+// 不再递归拉子进程。
+const fsizeChildEnv = "MONITOR_FSIZE_CHILD"
+
+// fsizeChildResult 是子进程回给父进程的观测值（只含断言需要的字段）。
+type fsizeChildResult struct {
+	Err            string   `json:"err"`
+	SetLimitErr    string   `json:"set_limit_err"`
+	CollectErr     string   `json:"collect_err"`
+	MemoryTotal    int64    `json:"memory_total"`
+	Cores          int      `json:"cores"`
+	Warnings       []string `json:"warnings"`
+	HistoryLeft    bool     `json:"history_left"`
+	RestoreErr     string   `json:"restore_err"`
+	RecoverErr     string   `json:"recover_err"`
+	RecoverWarn    []string `json:"recover_warnings"`
+	HistoryVersion int      `json:"history_version"`
+	HistorySamples int      `json:"history_samples"`
+	ReadErr        string   `json:"read_err"`
+}
+
+// TestResourceExhaustionHistoryWrite 用 RLIMIT_FSIZE 限制可写文件大小，
 // 让历史曲线落盘返回 EFBIG：断言采集仍成功、warning 明确、不留半截文件，
 // 并在恢复限额后用同一 collector 反证写入成功。
+//
+// 注入放在子进程里：RLIMIT_FSIZE 是进程级限额，会连带限制 testing 自身对
+// -test.testlogfile 的写入（go test 以 4KB 块落盘），在进程内注入时偶发把 testlog
+// 撑爆，绿用例变成 "testing: can't write ...: file too large"（实测 20 次里坏 2~3 次）。
+// 子进程不带 -test.testlogfile，stdout 是管道（不受文件大小限额约束），
+// 因此可以稳定制造真实 EFBIG 而不污染测试框架。
+//
+// 子进程用同一个测试二进制自执行（os.Args[0] + -test.run），不引入额外构建产物。
 func TestResourceExhaustionHistoryWrite(t *testing.T) {
+	if os.Getenv(fsizeChildEnv) == "1" {
+		runFSIZEHistoryChild(t)
+		return
+	}
 	requireLinux(t)
 	procRoot, sysRoot := newFixture(t)
 	stateDir := t.TempDir()
-	t.Setenv("KORE_STATE_DIR", stateDir)
-	collector := monitor.NewCollector(procRoot, sysRoot)
-	historyPath := filepath.Join(stateDir, "history.json")
 
+	cmd := exec.Command(os.Args[0], "-test.run=^TestResourceExhaustionHistoryWrite$", "-test.v=false")
+	cmd.Env = append(os.Environ(),
+		fsizeChildEnv+"=1",
+		"KORE_STATE_DIR="+stateDir,
+		"MONITOR_FSIZE_PROC="+procRoot,
+		"MONITOR_FSIZE_SYS="+sysRoot,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("子进程执行失败: %v\n%s", err, out)
+	}
+	got, ok := parseFSIZEChild(out)
+	if !ok {
+		t.Fatalf("子进程未输出观测结果:\n%s", out)
+	}
+	if got.Err != "" || got.SetLimitErr != "" {
+		t.Fatalf("子进程注入失败: err=%q set_limit=%q", got.Err, got.SetLimitErr)
+	}
+	if got.CollectErr != "" {
+		t.Fatalf("写入受限不应让采集失败: %s", got.CollectErr)
+	}
+	if got.MemoryTotal <= 0 || got.Cores != 2 {
+		t.Fatalf("读路径不受 FSIZE 影响，应有真实读数: memory_total=%d cores=%d", got.MemoryTotal, got.Cores)
+	}
+	requireWarning(t, got.Warnings, "保存历史曲线失败")
+	requireWarning(t, got.Warnings, "file too large")
+	if got.HistoryLeft {
+		t.Fatal("写失败后不应留下 history.json（半截文件）")
+	}
+	// 反证：恢复限额后同一路径必须写成功，证明失败来自注入而不是环境。
+	if got.RestoreErr != "" {
+		t.Fatalf("恢复 RLIMIT_FSIZE 失败: %s", got.RestoreErr)
+	}
+	if got.RecoverErr != "" {
+		t.Fatalf("恢复限额后采集失败: %s", got.RecoverErr)
+	}
+	requireNoWarning(t, got.RecoverWarn, "保存历史曲线失败")
+	if got.ReadErr != "" {
+		t.Fatalf("恢复限额后应写出 history.json: %s", got.ReadErr)
+	}
+	if got.HistoryVersion != 1 || got.HistorySamples != 1 {
+		t.Fatalf("恢复限额后应写入 1 个采样点: version=%d samples=%d", got.HistoryVersion, got.HistorySamples)
+	}
+}
+
+// parseFSIZEChild 从子进程输出里取出 fsizeChildResult（前缀标记行，避免和其它 PASS 输出混淆）。
+func parseFSIZEChild(out []byte) (fsizeChildResult, bool) {
+	const marker = "FSIZE_CHILD_RESULT "
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, marker) {
+			continue
+		}
+		var got fsizeChildResult
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, marker)), &got); err != nil {
+			return fsizeChildResult{}, false
+		}
+		return got, true
+	}
+	return fsizeChildResult{}, false
+}
+
+// runFSIZEHistoryChild 是子进程侧实现：注入 64 字节限额 → 采集 → 恢复 → 反证写入。
+// 所有失败都写进结构体回给父进程，不在子进程里 Fatalf（避免父进程只看到退出码）。
+func runFSIZEHistoryChild(t *testing.T) {
+	procRoot, sysRoot := os.Getenv("MONITOR_FSIZE_PROC"), os.Getenv("MONITOR_FSIZE_SYS")
+	historyPath := filepath.Join(os.Getenv("KORE_STATE_DIR"), "history.json")
+	got := fsizeChildResult{}
 	// 超过文件大小限额会触发 SIGXFSZ（默认终止进程）；忽略后写调用返回 EFBIG。
 	signal.Ignore(syscall.SIGXFSZ)
-	t.Cleanup(func() { signal.Reset(syscall.SIGXFSZ) })
+	defer signal.Reset(syscall.SIGXFSZ)
 	var old syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &old); err != nil {
-		t.Fatalf("读取 RLIMIT_FSIZE 失败: %v", err)
+		got.Err = "读取 RLIMIT_FSIZE 失败: " + err.Error()
+		emitFSIZEChild(got)
+		return
 	}
-	setRlimit(t, syscall.RLIMIT_FSIZE, syscall.Rlimit{Cur: 64, Max: old.Max})
-
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 64, Max: old.Max}); err != nil {
+		got.SetLimitErr = err.Error()
+		emitFSIZEChild(got)
+		return
+	}
+	collector := monitor.NewCollector(procRoot, sysRoot)
 	result, err := collector.System(shortCtx(), monitor.SystemParams{HistoryPoints: 10, HistoryIntervalS: 1})
 	if err != nil {
-		t.Fatalf("写入受限不应让采集失败: %v", err)
+		got.CollectErr = err.Error()
 	}
-	assertSystemShape(t, result)
-	if result.Memory.Total <= 0 || result.CPU.Cores != 2 {
-		t.Fatalf("读路径不受 FSIZE 影响，应有真实读数: memory=%+v cpu=%+v", result.Memory, result.CPU)
+	got.MemoryTotal = result.Memory.Total
+	got.Cores = result.CPU.Cores
+	got.Warnings = result.Warnings
+	if _, statErr := os.Stat(historyPath); statErr == nil {
+		got.HistoryLeft = true
 	}
-	requireWarning(t, result.Warnings, "保存历史曲线失败")
-	requireWarning(t, result.Warnings, "file too large")
-	if _, statErr := os.Stat(historyPath); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("写失败后不应留下 history.json（半截文件）: err=%v", statErr)
-	}
-
-	// 反证：恢复限额后同一路径必须写成功，证明失败来自注入而不是环境。
 	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &old); err != nil {
-		t.Fatalf("恢复 RLIMIT_FSIZE 失败: %v", err)
+		got.RestoreErr = err.Error()
+		emitFSIZEChild(got)
+		return
 	}
 	second, err := collector.System(shortCtx(), monitor.SystemParams{HistoryPoints: 10, HistoryIntervalS: 1})
 	if err != nil {
-		t.Fatalf("恢复限额后采集失败: %v", err)
+		got.RecoverErr = err.Error()
 	}
-	requireNoWarning(t, second.Warnings, "保存历史曲线失败")
+	got.RecoverWarn = second.Warnings
 	data, err := os.ReadFile(historyPath)
 	if err != nil {
-		t.Fatalf("恢复限额后应写出 history.json: %v", err)
+		got.ReadErr = err.Error()
+		emitFSIZEChild(got)
+		return
 	}
 	var file historyFileShape
 	if err := json.Unmarshal(data, &file); err != nil {
-		t.Fatalf("恢复限额后 history.json 非法: %v", err)
+		got.ReadErr = "history.json 非法: " + err.Error()
+		emitFSIZEChild(got)
+		return
 	}
-	if file.Version != 1 || len(file.Samples) != 1 {
-		t.Fatalf("恢复限额后应写入 1 个采样点: version=%d samples=%d", file.Version, len(file.Samples))
+	got.HistoryVersion = file.Version
+	got.HistorySamples = len(file.Samples)
+	emitFSIZEChild(got)
+}
+
+// emitFSIZEChild 打印父进程可解析的单行观测结果。
+func emitFSIZEChild(got fsizeChildResult) {
+	data, err := json.Marshal(got)
+	if err != nil {
+		fmt.Println("FSIZE_CHILD_MARSHAL_FAIL")
+		return
 	}
+	fmt.Println("FSIZE_CHILD_RESULT " + string(data))
 }
 
 // TestResourceExhaustionFileDescriptors 用 RLIMIT_NOFILE + 自占 fd 制造 EMFILE：
