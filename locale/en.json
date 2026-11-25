@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-monitor (system monitoring plugin)",
+    "description": "Reads real Linux /proc and /sys data and returns on demand a system overview, top processes, disk usage and temperatures. Production grade (depth_level=production), a dependency-free base component.",
+    "detail": "docs/DETAIL.en.md"
+  }
+}

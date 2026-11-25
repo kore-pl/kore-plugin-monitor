@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-monitor（系统监控插件）",
+    "description": "真实读取 Linux `/proc` 与 `/sys`，按需返回系统概览、进程 TOP、磁盘用量与温度。生产级（depth_level=production），M5 批 1「无依赖基础件」。 从插件市场安装 `monitor`，或通过 `make dist` 产出 `dist/monitor-0.5.0.tar.gz` 导入。开发验证：`make check`（gofmt → go vet → go test -timeout 200s），含 boundary / fault 测试。",
+    "detail": "docs/DETAIL.md"
+  }
+}

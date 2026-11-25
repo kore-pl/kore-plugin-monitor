@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-monitor (plugin de monitoramento do sistema)",
+    "description": "Lê dados reais de /proc e /sys do Linux e retorna sob demanda uma visão geral do sistema, os processos com maior consumo, uso de disco e temperaturas. Grau de produção (depth_level=production), componente básico sem dependências.",
+    "detail": "docs/DETAIL.pt.md"
+  }
+}

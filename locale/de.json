@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-monitor (Plugin für Systemüberwachung)",
+    "description": "Liest echte Linux-Daten aus /proc und /sys und liefert bei Bedarf einen Systemüberblick, die Top-Prozesse, Datenträgerauslastung und Temperaturen. Produktionsreif (depth_level=production), abhängigkeitsfreie Basiskomponente.",
+    "detail": "docs/DETAIL.de.md"
+  }
+}

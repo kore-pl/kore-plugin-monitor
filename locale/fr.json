@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-monitor (plugin de surveillance système)",
+    "description": "Lit les vraies données Linux /proc et /sys et renvoie à la demande un aperçu du système, les principaux processus, l'utilisation des disques et les températures. Qualité production (depth_level=production), composant de base sans dépendances.",
+    "detail": "docs/DETAIL.fr.md"
+  }
+}
