@@ -70,7 +70,11 @@ func (c *Collector) historyPath() string {
 // recordHistory 读取缓冲并按需追加本次采样点，返回可直接绘图的列式结果。
 // 单个文件读写失败只写 warning，不影响本次采集结果。
 func (c *Collector) recordHistory(sample HistorySample, params SystemParams, warnings *[]string) HistoryResult {
-	path := c.historyPath()
+	return recordHistory(c.historyPath(), sample, params, warnings)
+}
+
+// recordHistory 是跨执行面共用的落盘逻辑：path 为空时只保留本次返回的点。
+func recordHistory(path string, sample HistorySample, params SystemParams, warnings *[]string) HistoryResult {
 	historyMu.Lock()
 	defer historyMu.Unlock()
 	file, loadWarning := loadHistoryFile(path)

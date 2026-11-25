@@ -4,8 +4,11 @@ package monitor
 
 import "syscall"
 
-// platformSupported 表示当前平台是否提供真实 /proc 采集。
+// platformSupported 表示当前平台是否提供真实采集（Linux 走 /proc 与 /sys）。
 const platformSupported = true
+
+// platformLabel 用于结果/错误消息中说明当前采集路径，不是内部术语泄漏到 UI。
+const platformLabel = "Linux /proc"
 
 // fsStats 是 statfs 的关键计数（块大小、块数、inode 数）。
 type fsStats struct {

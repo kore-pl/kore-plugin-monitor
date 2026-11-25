@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -81,9 +80,6 @@ func loadInfo(t *testing.T) infoManifest {
 // 读 info.json 的采集器方法清单，逐个断言 Call 有对应分支，且反向无遗漏。
 // 配置契约方法不在采集器表里，由 TestConfigMethodsDeclared 单独断言。
 func TestMethodCapabilitiesMatchCollector(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("monitor 只在 Linux 提供真实采集；非 Linux 由 call_unsupported_test.go 断言 E_UNSUPPORTED")
-	}
 	info := loadInfo(t)
 	if len(info.MethodCapabilities) == 0 {
 		t.Fatal("info.json 缺少 method_capabilities 声明")

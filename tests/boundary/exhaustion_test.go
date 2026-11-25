@@ -1,3 +1,5 @@
+//go:build linux
+
 // 资源耗尽（resource exhaustion）类边界：用内核限额**真实注入**，不 mock 错误——
 //   - RLIMIT_FSIZE（等价 ulimit -f）：历史曲线落盘必然 EFBIG（"file too large"）；
 //   - RLIMIT_NOFILE（等价 ulimit -n）：/proc 读取必然 EMFILE（"too many open files"）。

@@ -24,8 +24,9 @@ type Collector struct {
 	sleep    func(time.Duration)
 }
 
-// NewExecutor 返回生产执行面（真实读取 /proc 与 /sys）。
-func NewExecutor() Executor { return NewCollector(DefaultProcRoot, DefaultSysRoot) }
+// NewExecutor 返回生产执行面；平台分支由 newPlatformExecutor 注入，
+// Linux 保持原 /proc 路径不变，darwin/windows 走各自平台文件里的真实命令采集。
+func NewExecutor() Executor { return newPlatformExecutor() }
 
 // NewCollector 构造采集器；root 为空时回落到标准挂载点。
 // stateDir 是插件状态目录（KORE_STATE_DIR），用于持久化历史曲线；未设置时只保留进程内缓冲。
@@ -37,7 +38,7 @@ func NewCollector(procRoot, sysRoot string) *Collector {
 		sysRoot = DefaultSysRoot
 	}
 	return &Collector{
-		procRoot: procRoot, sysRoot: sysRoot, stateDir: strings.TrimSpace(os.Getenv("KORE_STATE_DIR")),
+		procRoot: procRoot, sysRoot: sysRoot, stateDir: stateDirFromEnv(),
 		interval: DefaultSampleInterval,
 		now:      time.Now, sleep: time.Sleep,
 	}

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-25
+
+### 新增
+
+- **macOS / Windows 真实采集**（竞品清单条目 14 / P1）：monitor 插件不再对非 Linux 一律返回 `E_UNSUPPORTED`。macOS 走 `sysctl kern.cp_time` / `vm_stat` / `df -kP` / `netstat -ib` / `ps` / `powermetrics`；Windows 走 `powershell.exe -NoProfile -Command` 调 WMI/CIM（`Win32_OperatingSystem` / `Win32_LogicalDisk` / `Win32_PerfFormattedData_*` / `MSAcpi_ThermalZoneTemperature`）。全部平台专有命令固定在 `system_darwin.go` / `system_windows.go`，通用调度在 `shell.go`，平台解析器在 `darwin_parse_text.go` / `windows_parse_text.go`，不进 `kore/internal/core`（G-16）。
+- **显式降级矩阵**：命令缺失/失败时只写 `warnings[]` 并保留真实读到的值；温度不可读返回 `available=false` 且 warning 说明原因，CPU/内存/磁盘失败不填 0 冒充实测。前端 `web/monitor.js` 从 `result.source` 显示真实采集来源（Linux 系统文件 / macOS 系统命令 / Windows 系统信息），并把首条 warning 呈现给用户。
+- **交叉验证**：`GOOS=darwin GOARCH=arm64 go build` / `go vet` 与 `GOOS=windows GOARCH=amd64 go build` / `go vet` 全绿；`darwin_parse_text.go` / `windows_parse_text.go` 用 fixture 单测在 Linux 上验证算法；Linux 原 `/proc` 路径与全部旧测试保持绿。
+
+### 边界
+
+- 本机是 Linux，macOS / Windows 仅做交叉编译 + fixture 单测，**真机未验证**（命令存在性 / 权限 / 输出格式差异需实机复核），不编造运行结果。
+
 ## [0.4.0] - 2026-11-24
 
 ### 新增

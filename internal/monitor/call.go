@@ -12,7 +12,7 @@ import (
 // 平台不支持回 E_UNSUPPORTED；执行面故障统一回 E_UPSTREAM。
 func Call(method string, raw json.RawMessage, exec Executor, ctx Context) (json.RawMessage, *pluginapi.Error) {
 	if !platformSupported {
-		return nil, &pluginapi.Error{Code: pluginapi.E_UNSUPPORTED, Message: errUnsupportedPlatform.Error()}
+		return nil, &pluginapi.Error{Code: pluginapi.E_UNSUPPORTED, Message: errUnsupportedPlatform.Error() + "（可用平台：Linux / macOS / Windows）"}
 	}
 	if exec == nil {
 		exec = NewExecutor()
