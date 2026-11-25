@@ -1,5 +1,7 @@
 # kore-plugin-monitor
 
+语言：[简体中文](docs/DETAIL.md) · [English](docs/DETAIL.en.md) · [Español](docs/DETAIL.es.md) · [Français](docs/DETAIL.fr.md) · [Deutsch](docs/DETAIL.de.md) · [Русский](docs/DETAIL.ru.md) · [Português](docs/DETAIL.pt.md)
+
 kore 的系统监控插件：**真实读取 Linux `/proc` 与 `/sys`**，按需返回系统概览、进程 TOP、
 磁盘用量与温度。生产级（`depth_level=production`），属 M5 批 1「无依赖基础件」。
 
@@ -100,6 +102,11 @@ tar 首条目为 `info.json`；确定性打包保证同源码两次出包 sha256
 ## License
 
 MIT © pengtang1024
+
+
+## 支持本项目
+
+如果 系统监控插件 帮你省了时间，欢迎在 [GitHub](https://github.com/kore-pl/kore-plugin-monitor) 点个 ⭐ Star——这是作者继续维护的最大动力。也欢迎提 issue、PR 或参与讨论。
 
 <!-- oss:begin -->
 ## 开源与贡献
