@@ -9,11 +9,12 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// TestCallUnsupportedPlatform 在既无 /proc、也无平台命令采集实现的 OS 上断言四个方法
+// TestCallUnsupportedPlatform 在既无 /proc、也无平台命令采集实现的 OS 上断言全部方法
 // 都显式返回 E_UNSUPPORTED，不静默降级为空结果（G-16 能力缺失禁止静默降级）。
 func TestCallUnsupportedPlatform(t *testing.T) {
 	methods := []struct{ method, params string }{
 		{"monitor.system", `{}`},
+		{"monitor.sample", `{}`},
 		{"monitor.processes", `{"limit":1}`},
 		{"monitor.disks", `{}`},
 		{"monitor.temperature", `{}`},

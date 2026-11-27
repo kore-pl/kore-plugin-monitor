@@ -1,7 +1,7 @@
 {
   "id": "monitor",
   "name": "系统监控插件",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "production",
@@ -12,6 +12,7 @@
   ],
   "method_capabilities": {
     "monitor.system": "system:read",
+    "monitor.sample": "system:read",
     "monitor.processes": "system:read",
     "monitor.disks": "system:read",
     "monitor.temperature": "system:read",
@@ -31,5 +32,5 @@
     "ops",
     "sec"
   ],
-  "size_bytes": 1464539
+  "size_bytes": 1465861
 }

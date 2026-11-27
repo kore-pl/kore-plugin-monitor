@@ -82,7 +82,7 @@ func dispatch(request *pluginapi.Request, cfg *config, logger *slog.Logger) (*pl
 func normalizeMethod(method, id string) (string, bool) {
 	name := strings.TrimPrefix(method, id+".")
 	switch name {
-	case "system", "processes", "disks", "temperature":
+	case "system", "sample", "processes", "disks", "temperature":
 		return "monitor." + name, true
 	default:
 		return "", false

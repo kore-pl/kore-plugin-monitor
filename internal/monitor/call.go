@@ -28,6 +28,23 @@ func Call(method string, raw json.RawMessage, exec Executor, ctx Context) (json.
 			return nil, classify(execErr)
 		}
 		return encode(result)
+	case "monitor.sample":
+		// 薄包装：复用 System 的真实采集（其中已调 recordHistory 追加历史点），
+		// 不新增 Executor 方法、不起任何定时器（G-19）。周期由调用方（scheduler 任务）提供。
+		// 入参 history_points / history_interval_s 可空，语义与 monitor.system 完全一致，
+		// 由 configDefaultsFor("monitor.sample") 注入配置缺省值后合并。
+		params, err := parseSystemParams(raw)
+		if err != nil {
+			return nil, invalid(err.Error())
+		}
+		result, execErr := exec.System(ctx, params)
+		if execErr != nil {
+			return nil, classify(execErr)
+		}
+		return encode(SampleResult{
+			Schema: "monitor.sample.v1", SampledAt: result.SampledAt, Source: result.Source,
+			Appended: result.History.Appended, History: result.History, Warnings: result.Warnings,
+		})
 	case "monitor.processes":
 		params, err := parseProcessParams(raw)
 		if err != nil {

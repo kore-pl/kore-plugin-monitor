@@ -20,6 +20,18 @@ type SystemResult struct {
 	Warnings  []string      `json:"warnings"`
 }
 
+// SampleResult 是 monitor.sample 的结果：薄包装复用 System 的单次采集（已含历史落点），
+// 只暴露调度器关心的最小字段。appended 与 history.appended 同源，便于任务执行记录直接核对
+// 「这一跳是否真的落点」——scheduler interval_s 必须 ≥ history.interval_s，否则多数跳不落点。
+type SampleResult struct {
+	Schema    string        `json:"schema"`
+	SampledAt string        `json:"sampled_at"`
+	Source    string        `json:"source"`
+	Appended  bool          `json:"appended"`
+	History   HistoryResult `json:"history"`
+	Warnings  []string      `json:"warnings"`
+}
+
 // CPUInfo 是 CPU 总使用率与可选分核使用率。
 type CPUInfo struct {
 	UsagePercent     float64  `json:"usage_percent"`

@@ -19,18 +19,23 @@ type infoManifest struct {
 }
 
 // implementedMethod 是采集器已实现的方法及其最小合法参数。
+// delegatesTo 非空表示该方法薄包装复用另一个执行面方法（monitor.sample → System），
+// 替身记录的调用名会是后者而不是方法名本身。
 type implementedMethod struct {
-	method string
-	params string
+	method      string
+	params      string
+	delegatesTo string
 }
 
 // implementedMethods 是采集器（monitor.Call）分发分支的方法清单；新增采集方法必须同步 info.json 与本表。
 // config.get / config.set 由 dispatch 层实现，不属于采集器分支，单独在 config 契约测试里断言（PLUGIN-CONFIG §1）。
 var implementedMethods = []implementedMethod{
-	{"monitor.system", `{}`},
-	{"monitor.processes", `{"limit":1}`},
-	{"monitor.disks", `{}`},
-	{"monitor.temperature", `{}`},
+	{"monitor.system", `{}`, ""},
+	// monitor.sample 是薄包装：内部调 Executor.System（已含 recordHistory），不新增接口方法。
+	{"monitor.sample", `{}`, "monitor.system"},
+	{"monitor.processes", `{"limit":1}`, ""},
+	{"monitor.disks", `{}`, ""},
+	{"monitor.temperature", `{}`, ""},
 }
 
 // configMethods 是 dispatch 层配置契约方法的期望能力（PLUGIN-CONFIG §1 + PROTOCOL §3.1.2.1）。
@@ -105,8 +110,12 @@ func TestMethodCapabilitiesMatchCollector(t *testing.T) {
 		if perr != nil {
 			t.Fatalf("%s 分发失败: code=%s message=%s", method, perr.Code, perr.Message)
 		}
-		if result == nil || exec.called != method {
-			t.Fatalf("%s 未命中采集器分支（实际分发到 %q）", method, exec.called)
+		wantCall := item.delegatesTo
+		if wantCall == "" {
+			wantCall = method
+		}
+		if result == nil || exec.called != wantCall {
+			t.Fatalf("%s 未命中采集器分支（实际分发到 %q，期望 %q）", method, exec.called, wantCall)
 		}
 		if !contains(info.Capabilities, capability) {
 			t.Fatalf("插件级 capabilities 未包含 %q（方法 %s 声明了它）", capability, method)

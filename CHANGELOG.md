@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0] - 2026-11-27
+
+### 新增
+
+- **`monitor.sample` 连续采样入口（feat → minor）**：新增只读方法，薄包装复用 `Executor.System`——真实采集与 `recordHistory` 历史落点全部沿用现有实现，**不新增 `Executor` 接口方法**（避免替身/期望表涟漪）、**插件内零定时器**（G-19）。周期由用户自建内核 scheduler 任务提供（`plugin=monitor` / `method=monitor.sample` / `interval_s≥30`）；默认不建任务时行为完全不变。出参 `monitor.sample.v1` 显式结构：`sampled_at` / `source` / `appended` / `history`（列式曲线，含 `interval_s`）/`warnings`，无 `object`/`any`（G-24）。`history.interval_s` 回带供前端与任务周期核对。
+- **配置注入与间隔匹配引导**：`configDefaultsFor` 为 `monitor.sample` 注入 `history_points` / `history_interval_s`（与 `monitor.system` 同一份配置，请求值优先）；`history_interval_s` 的中文 help 明确写出关键坑——scheduler 任务间隔必须 ≥ 历史间隔（相等最省），否则多数周期调用不落点。代码默认值保持 60 点 × 60s 不变（不破坏"刷新即见"）。
+- **`info.json` 方法级声明**：新增 `monitor.sample: system:read`；`manifest.json` 版本同步 0.6.0。
+
+### 测试
+
+- `method_capabilities_test.go` 期望表加 `monitor.sample` 并标注其委托 `System`；`recordingExecutor` 不需新方法；`config_contract_test.go` / 新增 `sample_test.go` 覆盖零参路径、配置注入与显式参数优先、非法间隔 E_INVALID、全名/裸名归一；`call_unsupported_test.go` 覆盖不支持平台显式 `E_UNSUPPORTED`。
+- e2e `TestSampleAppends` 真 `/proc` 断言：首点落点 → 未到间隔不落点 → 跨间隔落点且点数增长；`KORE_STATE_DIR` 指向 `t.TempDir()`，不碰运行态历史文件（G-29）。
+
+### 边界
+
+- 默认档代码不动：连续采样需用户显式创建 scheduler 任务；本轮未改内核调度配置、未注册任何默认启用的监控周期任务（G-19/G-10）。降权 `kore-monitor` 对 `<KORE_STATE_DIR>/history.json` 的写权限留 P3 隔离真机验证（未验证，不假设通过）。
+
 ## v0.5.1 (oss-standard) — 2026-11-25
 
 ### Docs / 配置（patch）

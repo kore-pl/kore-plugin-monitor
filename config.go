@@ -242,7 +242,7 @@ func configSchema() plugincfg.Schema {
 				"monitor.system 返回的历史曲线最多保留多少个采样点；调小后立即裁剪旧点。"),
 			intField("history_interval_s", "历史采样间隔（秒）", defaults.HistoryIntervalS,
 				monitor.MinHistoryInterval, monitor.MaxHistoryInterval,
-				"距上次采样达到该秒数才追加一个历史点；不启用任何后台定时器。"),
+				"距上次采样达到该秒数才追加一个历史点；不启用任何后台定时器。若用定时任务周期调用 monitor.sample，请把任务间隔设成不小于本值（两者相同最省），否则多数周期调用不会落点。"),
 			intField("cpu_threshold", "CPU 告警阈值（%）", defaults.CPUThreshold, 0, 100,
 				"CPU 使用率达到该值即在结果里标注告警；0 表示关闭 CPU 告警。"),
 			intField("memory_threshold", "内存告警阈值（%）", defaults.MemoryThreshold, 0, 100,
@@ -382,6 +382,13 @@ func configDefaultsFor(method string, cfg *config) (map[string]json.RawMessage, 
 			"history_points":     mustJSON(v.HistoryPoints),
 			"history_interval_s": mustJSON(v.HistoryIntervalS),
 			"thresholds":         thresholds,
+		}, true
+	case "monitor.sample", "sample":
+		// 与 system 同口径：sample 内部复用 System，历史容量/间隔也走同一份配置。
+		// 不注入 thresholds（sample 结果不含 alerts），其余两项注入后由 parseSystemParams 校验边界。
+		return map[string]json.RawMessage{
+			"history_points":     mustJSON(v.HistoryPoints),
+			"history_interval_s": mustJSON(v.HistoryIntervalS),
 		}, true
 	case "monitor.processes", "processes":
 		return map[string]json.RawMessage{

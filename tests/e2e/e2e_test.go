@@ -88,6 +88,45 @@ func TestSystemReal(t *testing.T) {
 	}
 }
 
+// TestSampleAppends 是 monitor.sample 的端到端落点断言（方案 §3.4 / P1 判据②）：
+// 每次调用都是真实 /proc 采样（薄包装复用 System，无后台定时器，G-19）；历史间隔 1s，
+// 连续快调不落点、跨过间隔后落点，证明 scheduler interval_s 必须 ≥ history_interval_s。
+// KORE_STATE_DIR 指向 t.TempDir()（G-29：不碰运行态 history.json）。
+func TestSampleAppends(t *testing.T) {
+	requireLinux(t)
+	t.Setenv("KORE_STATE_DIR", t.TempDir())
+	params := `{"history_points":10,"history_interval_s":1}`
+
+	var first monitor.SampleResult
+	call(t, "monitor.sample", params, &first)
+	if first.Schema != "monitor.sample.v1" || first.Source != "proc" {
+		t.Fatalf("schema/source 不符: %+v", first)
+	}
+	if !first.Appended || first.Appended != first.History.Appended || first.History.Count != 1 {
+		t.Fatalf("首次调用应落 1 点: appended=%v history=%+v", first.Appended, first.History)
+	}
+	if first.History.IntervalS != 1 || first.History.Capacity != 10 {
+		t.Fatalf("历史参数未按 sample 入参生效: interval=%d capacity=%d", first.History.IntervalS, first.History.Capacity)
+	}
+
+	// 立刻再调（间隔未到）→ appended=false，点数不增长。
+	var second monitor.SampleResult
+	call(t, "monitor.sample", params, &second)
+	if second.Appended || second.History.Count != first.History.Count {
+		t.Fatalf("未到间隔不应落点: appended=%v count=%d（首次 %d）", second.Appended, second.History.Count, first.History.Count)
+	}
+
+	// 跨过 1s 间隔再调 → appended=true，点数增长（scheduler 周期 ≥ 间隔才有意义）。
+	time.Sleep(1100 * time.Millisecond)
+	var third monitor.SampleResult
+	call(t, "monitor.sample", params, &third)
+	if !third.Appended || third.History.Count <= second.History.Count {
+		t.Fatalf("跨间隔后应落点并增长: appended=%v count=%d（前 %d）", third.Appended, third.History.Count, second.History.Count)
+	}
+	t.Logf("sample 落点序列: 首点 count=%d → 未到间隔 count=%d(appended=%v) → 跨间隔 count=%d(appended=%v)",
+		first.History.Count, second.History.Count, second.Appended, third.History.Count, third.Appended)
+}
+
 func TestSystemCPUVaries(t *testing.T) {
 	requireLinux(t)
 	var samples []float64
